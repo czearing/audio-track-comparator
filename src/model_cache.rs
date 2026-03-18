@@ -5,6 +5,7 @@ pub struct ModelPaths {
     pub text_embeddings: PathBuf,
     pub genre_onnx: PathBuf,
     pub instrument_onnx: PathBuf,
+    pub quality_dir: PathBuf,
 }
 
 fn cache_dir() -> PathBuf {
@@ -29,6 +30,14 @@ fn instrument_cache_dir() -> PathBuf {
         .join(".cache")
         .join("audio-track-comparator")
         .join("instruments")
+}
+
+fn quality_cache_dir() -> PathBuf {
+    dirs::home_dir()
+        .expect("Cannot determine home directory")
+        .join(".cache")
+        .join("audio-track-comparator")
+        .join("quality")
 }
 
 /// Locate an export script relative to the running binary, falling back to cwd.
@@ -101,19 +110,28 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let instrument_onnx = instrument_dir.join("instrument_detector.onnx");
     let instrument_labels = instrument_dir.join("instrument_labels.json");
 
+    let quality_dir = quality_cache_dir();
+    let quality_engagement = quality_dir.join("engagement.onnx");
+    let quality_approachability = quality_dir.join("approachability.onnx");
+    let quality_danceability = quality_dir.join("danceability.onnx");
+
     let clap_present = audio_encoder.exists() && text_embeddings.exists();
     let genre_present = genre_onnx.exists() && genre_labels.exists();
     let instrument_present = instrument_onnx.exists() && instrument_labels.exists();
+    let quality_present =
+        quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists();
 
-    if clap_present && genre_present && instrument_present {
+    if clap_present && genre_present && instrument_present && quality_present {
         println!("CLAP model cache:       {}", clap_dir.display());
         println!("Genre model cache:      {}", genre_dir.display());
         println!("Instrument model cache: {}", instrument_dir.display());
+        println!("Quality model cache:    {}", quality_dir.display());
         return Ok(ModelPaths {
             audio_encoder,
             text_embeddings,
             genre_onnx,
             instrument_onnx,
+            quality_dir,
         });
     }
 
@@ -141,6 +159,15 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         }
         if !instrument_labels.exists() {
             eprintln!("  {}", instrument_labels.display());
+        }
+        if !quality_engagement.exists() {
+            eprintln!("  {}", quality_engagement.display());
+        }
+        if !quality_approachability.exists() {
+            eprintln!("  {}", quality_approachability.display());
+        }
+        if !quality_danceability.exists() {
+            eprintln!("  {}", quality_danceability.display());
         }
         std::process::exit(1);
     }
@@ -247,14 +274,50 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         println!("Instrument model downloaded successfully.");
     }
 
+    // Download quality models if needed
+    if !quality_present {
+        println!("Downloading Essentia quality models (engagement / approachability / danceability)...");
+        println!("(One-time setup. Models will be cached for future runs.)");
+        println!();
+
+        let script = match find_script("export_quality_models.py") {
+            Some(p) => p,
+            None => {
+                eprintln!("ERROR: Could not find scripts/export_quality_models.py.");
+                eprintln!("Ensure you are running from the project root directory.");
+                std::process::exit(1);
+            }
+        };
+
+        run_script(python, &script, "quality models export");
+
+        if !quality_engagement.exists() || !quality_approachability.exists() || !quality_danceability.exists() {
+            eprintln!("ERROR: Quality export completed but expected files are still missing.");
+            if !quality_engagement.exists() {
+                eprintln!("  {}", quality_engagement.display());
+            }
+            if !quality_approachability.exists() {
+                eprintln!("  {}", quality_approachability.display());
+            }
+            if !quality_danceability.exists() {
+                eprintln!("  {}", quality_danceability.display());
+            }
+            std::process::exit(1);
+        }
+        println!();
+        println!("Quality models downloaded successfully.");
+    }
+
     println!("CLAP model cache:       {}", clap_dir.display());
     println!("Genre model cache:      {}", genre_dir.display());
     println!("Instrument model cache: {}", instrument_dir.display());
+    println!("Quality model cache:    {}", quality_dir.display());
 
     Ok(ModelPaths {
         audio_encoder,
         text_embeddings,
         genre_onnx,
         instrument_onnx,
+        quality_dir,
     })
 }

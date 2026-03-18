@@ -2,6 +2,14 @@ use crate::pipeline::TrackAnalysis;
 use serde::Serialize;
 
 #[derive(Serialize)]
+pub struct QualityDiff {
+    pub engagement_delta: f32,
+    pub approachability_delta: f32,
+    pub danceability_delta: f32,
+    pub hit_potential_delta: f32,
+}
+
+#[derive(Serialize)]
 pub struct BpmDiff {
     pub reference_bpm: f32,
     pub suno_bpm: f32,
@@ -40,6 +48,7 @@ pub struct Diff {
     pub key: KeyDiff,
     pub tags: TagsDiff,
     pub melody: MelodyDiff,
+    pub quality: QualityDiff,
 }
 
 fn set_diff_static<'a>(
@@ -84,6 +93,14 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
     let suno_pc = pitch_class_index(suno.key.root);
     let diff_abs = (ref_pc as i16 - suno_pc as i16).unsigned_abs() as u8;
     let distance_semitones = diff_abs.min(12 - diff_abs);
+
+    // Quality deltas — round to 2 decimal places
+    let round2 = |v: f32| (v * 100.0).round() / 100.0;
+    let engagement_delta = round2(suno.quality.engagement - reference.quality.engagement);
+    let approachability_delta =
+        round2(suno.quality.approachability - reference.quality.approachability);
+    let danceability_delta = round2(suno.quality.danceability - reference.quality.danceability);
+    let hit_potential_delta = round2(suno.quality.hit_potential - reference.quality.hit_potential);
 
     Diff {
         bpm: BpmDiff {
@@ -133,6 +150,12 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
                 &suno.melody.descriptors,
                 &reference.melody.descriptors,
             ),
+        },
+        quality: QualityDiff {
+            engagement_delta,
+            approachability_delta,
+            danceability_delta,
+            hit_potential_delta,
         },
     }
 }

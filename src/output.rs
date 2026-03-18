@@ -1,5 +1,6 @@
 use crate::diff::Diff;
 use crate::pipeline::TrackAnalysis;
+use crate::quality::QualityScores;
 use anyhow::Context;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,19 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
         "  Top genre:     {:<18} {}",
         reference.tags.genre.first().map(|s| s.as_str()).unwrap_or(""),
         suno.tags.genre.first().map(|s| s.as_str()).unwrap_or("")
+    );
+    println!(
+        "  Hit Potential: {:<18} {}",
+        format!("{:.1} / 10", reference.quality.hit_potential),
+        format!("{:.1} / 10", suno.quality.hit_potential)
+    );
+    println!(
+        "  Engagement:    {:<18.2} {:.2}",
+        reference.quality.engagement, suno.quality.engagement
+    );
+    println!(
+        "  Danceability:  {:<18.2} {:.2}",
+        reference.quality.danceability, suno.quality.danceability
     );
     println!();
     println!("  BPM delta:     {:.2}", diff.bpm.delta_bpm);
@@ -79,6 +93,7 @@ struct TrackJson<'a> {
     key: KeyJson<'a>,
     tags: TagsJson<'a>,
     melody: MelodyJson<'a>,
+    quality: &'a QualityScores,
 }
 
 #[derive(Serialize)]
@@ -159,6 +174,7 @@ pub fn write_report(
             melody: MelodyJson {
                 descriptors: &reference.melody.descriptors,
             },
+            quality: &reference.quality,
         },
         suno: TrackJson {
             bpm_bpm: suno.bpm_bpm,
@@ -176,6 +192,7 @@ pub fn write_report(
             melody: MelodyJson {
                 descriptors: &suno.melody.descriptors,
             },
+            quality: &suno.quality,
         },
         diff,
     };

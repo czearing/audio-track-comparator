@@ -8,6 +8,7 @@ mod key;
 mod model_cache;
 mod output;
 mod pipeline;
+mod quality;
 mod resample;
 mod vocab;
 

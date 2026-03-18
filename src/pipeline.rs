@@ -2,6 +2,7 @@ use crate::clap_model::{Melody, Tags};
 use crate::decode;
 use crate::key::KeyResult;
 use crate::model_cache::ModelPaths;
+use crate::quality::QualityScores;
 use crate::resample;
 use std::path::Path;
 
@@ -11,6 +12,7 @@ pub struct TrackAnalysis {
     pub key: KeyResult,
     pub tags: Tags,
     pub melody: Melody,
+    pub quality: QualityScores,
 }
 
 pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<TrackAnalysis> {
@@ -43,11 +45,17 @@ pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<Tra
     println!("  Running CLAP inference ...");
     let (tags, melody) = crate::clap_model::compute_tags(&samples_48000, model_paths, instruments, genre)?;
 
+    println!("  Scoring quality (engagement / approachability / danceability) ...");
+    let genre_cache = model_paths.genre_onnx.parent().expect("genre_onnx has no parent");
+    let quality_cache = model_paths.quality_dir.as_path();
+    let quality = crate::quality::score(&samples_22050, genre_cache, quality_cache)?;
+
     Ok(TrackAnalysis {
         bpm_bpm,
         bpm_source,
         key,
         tags,
         melody,
+        quality,
     })
 }
