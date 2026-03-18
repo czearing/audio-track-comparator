@@ -1,0 +1,38 @@
+# Rust build artifacts
+/target/
+
+# Generated JSON output files
+/output/
+/output_*/
+
+# Model files — downloaded at runtime via scripts/export_*.py
+# Never commit these (100MB–500MB each)
+*.onnx
+*.pb
+*.bin
+*.pt
+*.pth
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Dev team internal artifacts (not part of the project)
+/dev-team-output/
+
+# QA/validation scripts generated during development
+qa_check_paths.py
+qa_validate.py
+validate_json.py
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
