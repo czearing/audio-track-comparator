@@ -42,9 +42,9 @@ pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<Tra
     let genre_cache = model_paths.genre_onnx.parent().expect("genre_onnx has no parent");
     let genre = crate::genre::classify(&backbone, genre_cache)?;
 
-    println!("  Detecting instruments (MTG-Jamendo) ...");
+    println!("  Detecting instruments (MTT MusiCNN) ...");
     let instrument_cache = model_paths.instrument_onnx.parent().expect("instrument_onnx has no parent");
-    let instruments = crate::instruments::detect(&backbone, instrument_cache)?;
+    let instruments = crate::instruments::detect(&samples_22050, instrument_cache)?;
 
     println!("  Running CLAP inference ...");
     let (tags, melody) = crate::clap_model::compute_tags(&samples_48000, model_paths, instruments, genre)?;

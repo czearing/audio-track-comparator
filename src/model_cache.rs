@@ -126,8 +126,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let quality_sad = quality_dir.join("sad.onnx");
     let quality_acoustic = quality_dir.join("acoustic.onnx");
     let quality_timbre = quality_dir.join("timbre.onnx");
-    let quality_party = quality_dir.join("party.onnx");
-    let quality_electronic = quality_dir.join("electronic.onnx");
 
     let emotion_dir = emotion_cache_dir();
     let emotion_valence = emotion_dir.join("valence.onnx");
@@ -138,8 +136,7 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let instrument_present = instrument_onnx.exists() && instrument_labels.exists();
     let quality_present =
         quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists()
-        && quality_sad.exists() && quality_acoustic.exists() && quality_timbre.exists()
-        && quality_party.exists() && quality_electronic.exists();
+        && quality_sad.exists() && quality_acoustic.exists() && quality_timbre.exists();
     let emotion_present = emotion_valence.exists() && emotion_arousal.exists();
 
     if clap_present && genre_present && instrument_present && quality_present && emotion_present {
@@ -200,12 +197,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         }
         if !quality_timbre.exists() {
             eprintln!("  {}", quality_timbre.display());
-        }
-        if !quality_party.exists() {
-            eprintln!("  {}", quality_party.display());
-        }
-        if !quality_electronic.exists() {
-            eprintln!("  {}", quality_electronic.display());
         }
         if !emotion_valence.exists() {
             eprintln!("  {}", emotion_valence.display());
@@ -289,7 +280,7 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
 
     // Download instrument model if needed
     if !instrument_present {
-        println!("Downloading MTG-Jamendo instrument classifier (Discogs-EffNet head)...");
+        println!("Downloading MTT MusiCNN instrument model...");
         println!("(One-time setup. Model will be cached for future runs.)");
         println!();
 
@@ -320,7 +311,7 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
 
     // Download quality models if needed
     if !quality_present {
-        println!("Downloading Essentia quality/mood models...");
+        println!("Downloading Essentia quality models (engagement / approachability / danceability)...");
         println!("(One-time setup. Models will be cached for future runs.)");
         println!();
 
@@ -337,7 +328,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
 
         if !quality_engagement.exists() || !quality_approachability.exists() || !quality_danceability.exists()
             || !quality_sad.exists() || !quality_acoustic.exists() || !quality_timbre.exists()
-            || !quality_party.exists() || !quality_electronic.exists()
         {
             eprintln!("ERROR: Quality export completed but expected files are still missing.");
             if !quality_engagement.exists() {
@@ -357,12 +347,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
             }
             if !quality_timbre.exists() {
                 eprintln!("  {}", quality_timbre.display());
-            }
-            if !quality_party.exists() {
-                eprintln!("  {}", quality_party.display());
-            }
-            if !quality_electronic.exists() {
-                eprintln!("  {}", quality_electronic.display());
             }
             std::process::exit(1);
         }
