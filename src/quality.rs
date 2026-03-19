@@ -33,6 +33,8 @@ pub struct QualityScores {
     pub mood_sad: f32,           // 0=not sad, 1=melancholic/sad
     pub mood_acoustic: f32,      // 0=electronic, 1=acoustic
     pub timbre_bright: f32,      // 0=dark timbre, 1=bright timbre
+    pub mood_party: f32,         // 0=not a party vibe, 1=party energy
+    pub mood_electronic: f32,    // 0=organic/live, 1=electronic texture
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -119,6 +121,8 @@ pub fn score(
     let sad_path = quality_cache_dir.join("sad.onnx");
     let acoustic_path = quality_cache_dir.join("acoustic.onnx");
     let timbre_path = quality_cache_dir.join("timbre.onnx");
+    let party_path = quality_cache_dir.join("party.onnx");
+    let electronic_path = quality_cache_dir.join("electronic.onnx");
     let valence_path = emotion_cache_dir.join("valence.onnx");
     let arousal_path = emotion_cache_dir.join("arousal.onnx");
 
@@ -134,6 +138,8 @@ pub fn score(
             mood_sad: 0.5,
             mood_acoustic: 0.5,
             timbre_bright: 0.5,
+            mood_party: 0.5,
+            mood_electronic: 0.5,
         });
     }
 
@@ -169,6 +175,8 @@ pub fn score(
     let mut sad_session = build_session(&sad_path)?;
     let mut acoustic_session = build_session(&acoustic_path)?;
     let mut timbre_session = build_session(&timbre_path)?;
+    let mut party_session = build_session(&party_path)?;
+    let mut electronic_session = build_session(&electronic_path)?;
 
     let engagement = run_regression_head(&mut eng_session, &avg_embed)?;
     let approachability = run_regression_head(&mut app_session, &avg_embed)?;
@@ -184,6 +192,10 @@ pub fn score(
     let mood_acoustic = run_softmax_head(&mut acoustic_session, &avg_embed, 0)?;
     // timbre: [bright, dark]; index 0 = P(bright)
     let timbre_bright = run_softmax_head(&mut timbre_session, &avg_embed, 0)?;
+    // mood_party: [party, non_party]; index 0 = P(party)
+    let mood_party = run_softmax_head(&mut party_session, &avg_embed, 0)?;
+    // mood_electronic: [electronic, non_electronic]; index 0 = P(electronic)
+    let mood_electronic = run_softmax_head(&mut electronic_session, &avg_embed, 0)?;
 
     // Composite hit potential, rounded to 1 decimal place
     let raw_hit = engagement * 0.45 + approachability * 0.35 + danceability * 0.20;
@@ -199,5 +211,7 @@ pub fn score(
         mood_sad,
         mood_acoustic,
         timbre_bright,
+        mood_party,
+        mood_electronic,
     })
 }

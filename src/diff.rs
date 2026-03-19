@@ -12,6 +12,8 @@ pub struct QualityDiff {
     pub mood_sad_delta: f32,
     pub mood_acoustic_delta: f32,
     pub timbre_bright_delta: f32,
+    pub mood_party_delta: f32,
+    pub mood_electronic_delta: f32,
 }
 
 #[derive(Serialize)]
@@ -113,6 +115,9 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
     let mood_sad_delta = round2(suno.quality.mood_sad - reference.quality.mood_sad);
     let mood_acoustic_delta = round2(suno.quality.mood_acoustic - reference.quality.mood_acoustic);
     let timbre_bright_delta = round2(suno.quality.timbre_bright - reference.quality.timbre_bright);
+    let mood_party_delta = round2(suno.quality.mood_party - reference.quality.mood_party);
+    let mood_electronic_delta =
+        round2(suno.quality.mood_electronic - reference.quality.mood_electronic);
 
     Diff {
         bpm: BpmDiff {
@@ -173,6 +178,8 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
             mood_sad_delta,
             mood_acoustic_delta,
             timbre_bright_delta,
+            mood_party_delta,
+            mood_electronic_delta,
         },
     }
 }

@@ -70,6 +70,14 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
         "  Timbre Bright:     {:<15.2} {:.2}",
         reference.quality.timbre_bright, suno.quality.timbre_bright
     );
+    println!(
+        "  Party:             {:<15.2} {:.2}",
+        reference.quality.mood_party, suno.quality.mood_party
+    );
+    println!(
+        "  Electronic:        {:<15.2} {:.2}",
+        reference.quality.mood_electronic, suno.quality.mood_electronic
+    );
     println!();
     println!("  BPM delta:     {:.2}", diff.bpm.delta_bpm);
     println!(

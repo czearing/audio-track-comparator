@@ -39,6 +39,12 @@ MODELS = {
     "timbre.onnx": (
         f"{BASE_URL}/timbre/timbre-discogs-effnet-1.onnx"
     ),
+    "party.onnx": (
+        f"{BASE_URL}/mood_party/mood_party-discogs-effnet-1.onnx"
+    ),
+    "electronic.onnx": (
+        f"{BASE_URL}/mood_electronic/mood_electronic-discogs-effnet-1.onnx"
+    ),
 }
 
 
