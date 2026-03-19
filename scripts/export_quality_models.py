@@ -30,6 +30,15 @@ MODELS = {
     "danceability.onnx": (
         f"{BASE_URL}/danceability/danceability-discogs-effnet-1.onnx"
     ),
+    "sad.onnx": (
+        f"{BASE_URL}/mood_sad/mood_sad-discogs-effnet-1.onnx"
+    ),
+    "acoustic.onnx": (
+        f"{BASE_URL}/mood_acoustic/mood_acoustic-discogs-effnet-1.onnx"
+    ),
+    "timbre.onnx": (
+        f"{BASE_URL}/timbre/timbre-discogs-effnet-1.onnx"
+    ),
 }
 
 

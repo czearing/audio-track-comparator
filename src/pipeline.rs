@@ -34,9 +34,13 @@ pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<Tra
     println!("  Detecting key ...");
     let key = crate::key::detect(&samples_22050);
 
+    println!("  Running Discogs-EffNet backbone (once) ...");
+    let backbone_path = &model_paths.genre_onnx;
+    let backbone = crate::backbone::run(&samples_22050, backbone_path)?;
+
     println!("  Detecting genre (Discogs-EffNet) ...");
     let genre_cache = model_paths.genre_onnx.parent().expect("genre_onnx has no parent");
-    let genre = crate::genre::detect(&samples_22050, genre_cache)?;
+    let genre = crate::genre::classify(&backbone, genre_cache)?;
 
     println!("  Detecting instruments (MTT MusiCNN) ...");
     let instrument_cache = model_paths.instrument_onnx.parent().expect("instrument_onnx has no parent");
@@ -46,10 +50,9 @@ pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<Tra
     let (tags, melody) = crate::clap_model::compute_tags(&samples_48000, model_paths, instruments, genre)?;
 
     println!("  Scoring quality and emotion (engagement / approachability / danceability / mood) ...");
-    let genre_cache = model_paths.genre_onnx.parent().expect("genre_onnx has no parent");
     let quality_cache = model_paths.quality_dir.as_path();
     let emotion_cache = model_paths.emotion_dir.as_path();
-    let quality = crate::quality::score(&samples_22050, genre_cache, quality_cache, emotion_cache)?;
+    let quality = crate::quality::score(&backbone, quality_cache, emotion_cache)?;
 
     Ok(TrackAnalysis {
         bpm_bpm,

@@ -1,33 +1,26 @@
 /// Listener-engagement quality scoring using Essentia Discogs-EffNet classification heads.
 ///
 /// Pipeline:
-///   1. Resample to 16 kHz, compute log-mel patches (same backbone as genre.rs)
-///   2. Run discogs_genre.onnx to extract 1280-dim embeddings (output 1)
-///   3. Average-pool embeddings across all patches → one [1280] vector
-///   4. Feed that vector into each of the three regression head models:
+///   1. Receive pre-computed BackboneOutput (embeddings already extracted)
+///   2. Average-pool embeddings across all patches → one [1280] vector
+///   3. Feed that vector into each head model:
 ///        engagement.onnx        → model/Identity [1]
 ///        approachability.onnx   → model/Identity [1]
 ///        danceability.onnx      → model/Softmax  [2]  (index 0 = danceable prob)
+///        sad.onnx               → model/Softmax  [2]  (index 1 = sad prob)
+///        acoustic.onnx          → model/Softmax  [2]  (index 0 = acoustic prob)
+///        timbre.onnx            → model/Softmax  [2]  (index 0 = bright prob)
 ///
 /// All head models live in the "quality" subdirectory of the cache dir.
-/// The backbone (discogs_genre.onnx) lives in the "genre" subdirectory.
-use crate::resample;
-use anyhow::Context;
-use ndarray::{Array1, Array3};
+/// The backbone (discogs_genre.onnx) is run upstream in pipeline.rs.
+use crate::backbone::BackboneOutput;
+use ndarray::Array1;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use serde::Serialize;
 use std::path::Path;
 
-const SAMPLE_RATE: u32 = 16_000;
-const FRAME_SIZE: usize = 512;
-const HOP_SIZE: usize = 256;
-const N_MELS: usize = 96;
-const PATCH_SIZE: usize = 128;
 const N_EMBED: usize = 1280;
-
-const F_MIN: f64 = 0.0;
-const F_MAX: f64 = 8_000.0;
 
 #[derive(Serialize, Clone)]
 pub struct QualityScores {
@@ -37,117 +30,9 @@ pub struct QualityScores {
     pub hit_potential: f32,
     pub mood_dark_to_happy: f32, // 0=very dark, 1=very happy
     pub mood_aggressive: f32,    // 0=not aggressive, 1=very aggressive
-}
-
-// ── mel preprocessing (identical parameters to genre.rs) ─────────────────────
-
-fn build_mel_filterbank() -> Vec<Vec<f32>> {
-    let n_freqs = FRAME_SIZE / 2 + 1;
-    let sr = SAMPLE_RATE as f64;
-
-    fn hz_to_mel(f: f64) -> f64 {
-        2595.0 * (1.0 + f / 700.0).log10()
-    }
-    fn mel_to_hz(m: f64) -> f64 {
-        700.0 * (10.0f64.powf(m / 2595.0) - 1.0)
-    }
-
-    let mel_min = hz_to_mel(F_MIN);
-    let mel_max = hz_to_mel(F_MAX);
-    let n_pts = N_MELS + 2;
-    let mel_points: Vec<f64> = (0..n_pts)
-        .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (n_pts - 1) as f64)
-        .collect();
-    let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
-    let fft_freqs: Vec<f64> = (0..n_freqs)
-        .map(|k| k as f64 * sr / FRAME_SIZE as f64)
-        .collect();
-
-    let mut fb: Vec<Vec<f32>> = Vec::with_capacity(N_MELS);
-    for m in 0..N_MELS {
-        let lower = hz_points[m];
-        let center = hz_points[m + 1];
-        let upper = hz_points[m + 2];
-        let norm = if upper > lower { 2.0 / (upper - lower) } else { 1.0 };
-        let mut row = vec![0.0f32; n_freqs];
-        for k in 0..n_freqs {
-            let f = fft_freqs[k];
-            row[k] = if f <= lower || f >= upper {
-                0.0
-            } else if f <= center {
-                (norm * (f - lower) / (center - lower)) as f32
-            } else {
-                (norm * (upper - f) / (upper - center)) as f32
-            };
-        }
-        fb.push(row);
-    }
-    fb
-}
-
-#[inline]
-fn log_compression(x: f32) -> f32 {
-    (10000.0 * x + 1.0).log10()
-}
-
-fn compute_patches(mono_16k: &[f32]) -> Vec<Vec<f32>> {
-    use rustfft::{num_complex::Complex, FftPlanner};
-
-    let n_freqs = FRAME_SIZE / 2 + 1;
-    let filterbank = build_mel_filterbank();
-    let window: Vec<f32> = (0..FRAME_SIZE)
-        .map(|i| {
-            0.5 * (1.0
-                - (2.0 * std::f32::consts::PI * i as f32 / (FRAME_SIZE - 1) as f32).cos())
-        })
-        .collect();
-
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FRAME_SIZE);
-
-    let n_frames = if mono_16k.len() >= FRAME_SIZE {
-        (mono_16k.len() - FRAME_SIZE) / HOP_SIZE + 1
-    } else {
-        0
-    };
-    if n_frames == 0 {
-        return Vec::new();
-    }
-
-    let mut mel_frames: Vec<Vec<f32>> = Vec::with_capacity(n_frames);
-    let mut buf: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); FRAME_SIZE];
-    for frame_idx in 0..n_frames {
-        let start = frame_idx * HOP_SIZE;
-        for i in 0..FRAME_SIZE {
-            let s = *mono_16k.get(start + i).unwrap_or(&0.0);
-            buf[i] = Complex::new(s * window[i], 0.0);
-        }
-        fft.process(&mut buf);
-        let power: Vec<f32> = (0..n_freqs).map(|k| buf[k].norm_sqr()).collect();
-        let mel: Vec<f32> = filterbank
-            .iter()
-            .map(|row| {
-                let v: f32 = row.iter().zip(power.iter()).map(|(&w, &p)| w * p).sum();
-                log_compression(v)
-            })
-            .collect();
-        mel_frames.push(mel);
-    }
-
-    let n_patches = n_frames / PATCH_SIZE;
-    if n_patches == 0 {
-        return Vec::new();
-    }
-
-    let mut patches: Vec<Vec<f32>> = Vec::with_capacity(n_patches);
-    for p in 0..n_patches {
-        let mut patch = Vec::with_capacity(PATCH_SIZE * N_MELS);
-        for f in 0..PATCH_SIZE {
-            patch.extend_from_slice(&mel_frames[p * PATCH_SIZE + f]);
-        }
-        patches.push(patch);
-    }
-    patches
+    pub mood_sad: f32,           // 0=not sad, 1=melancholic/sad
+    pub mood_acoustic: f32,      // 0=electronic, 1=acoustic
+    pub timbre_bright: f32,      // 0=dark timbre, 1=bright timbre
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -173,7 +58,6 @@ fn build_session(path: &Path) -> anyhow::Result<Session> {
 /// Returns the single f32 score.
 fn run_regression_head(session: &mut Session, embedding: &[f32; N_EMBED]) -> anyhow::Result<f32> {
     let arr = Array1::<f32>::from_vec(embedding.to_vec());
-    // Head model expects shape [1, 1280] (batch of 1)
     let arr2d = arr
         .into_shape((1, N_EMBED))
         .map_err(|e| anyhow::anyhow!("Failed to reshape embedding: {}", e))?;
@@ -188,54 +72,57 @@ fn run_regression_head(session: &mut Session, embedding: &[f32; N_EMBED]) -> any
     Ok(*raw.iter().next().unwrap_or(&0.0))
 }
 
-/// Run the danceability classification head. Output is [2] softmax;
-/// index 0 is the "danceable" probability.
-fn run_danceability_head(session: &mut Session, embedding: &[f32; N_EMBED]) -> anyhow::Result<f32> {
+/// Run a softmax classification head. Output is [2]; returns the value at `positive_index`.
+fn run_softmax_head(
+    session: &mut Session,
+    embedding: &[f32; N_EMBED],
+    positive_index: usize,
+) -> anyhow::Result<f32> {
     let arr = Array1::<f32>::from_vec(embedding.to_vec());
     let arr2d = arr
         .into_shape((1, N_EMBED))
-        .map_err(|e| anyhow::anyhow!("Failed to reshape danceability embedding: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to reshape softmax head embedding: {}", e))?;
     let tensor = Tensor::<f32>::from_array(arr2d)
-        .map_err(|e| anyhow::anyhow!("Failed to create danceability input tensor: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create softmax head input tensor: {}", e))?;
     let outputs = session
         .run(ort::inputs![tensor])
-        .map_err(|e| anyhow::anyhow!("Danceability ONNX inference failed: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Softmax head ONNX inference failed: {}", e))?;
     let (_shape, raw) = outputs[0_usize]
         .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("Failed to extract danceability output: {}", e))?;
-    // raw is [danceable_prob, not_danceable_prob]; return danceable probability
-    Ok(*raw.iter().next().unwrap_or(&0.0))
+        .map_err(|e| anyhow::anyhow!("Failed to extract softmax head output: {}", e))?;
+    let vals: Vec<f32> = raw.iter().cloned().collect();
+    Ok(*vals.get(positive_index).unwrap_or(&0.0))
+}
+
+/// Run a danceability classification head. Output is [2] softmax;
+/// index 0 is the "danceable" probability. Kept for backward compatibility.
+fn run_danceability_head(session: &mut Session, embedding: &[f32; N_EMBED]) -> anyhow::Result<f32> {
+    run_softmax_head(session, embedding, 0)
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
 
-/// Compute quality scores for mono 22050 Hz audio.
+/// Compute quality scores from a pre-computed backbone output.
 ///
-/// `genre_cache_dir` must contain `discogs_genre.onnx` (backbone).
 /// `quality_cache_dir` must contain `engagement.onnx`, `approachability.onnx`,
-/// `danceability.onnx`.
+/// `danceability.onnx`, `sad.onnx`, `acoustic.onnx`, `timbre.onnx`.
 /// `emotion_cache_dir` must contain `valence.onnx` (mood_happy) and
 /// `arousal.onnx` (mood_relaxed).
 pub fn score(
-    mono_22050: &[f32],
-    genre_cache_dir: &Path,
+    backbone: &BackboneOutput,
     quality_cache_dir: &Path,
     emotion_cache_dir: &Path,
 ) -> anyhow::Result<QualityScores> {
-    let backbone_path = genre_cache_dir.join("discogs_genre.onnx");
     let engagement_path = quality_cache_dir.join("engagement.onnx");
     let approachability_path = quality_cache_dir.join("approachability.onnx");
     let danceability_path = quality_cache_dir.join("danceability.onnx");
+    let sad_path = quality_cache_dir.join("sad.onnx");
+    let acoustic_path = quality_cache_dir.join("acoustic.onnx");
+    let timbre_path = quality_cache_dir.join("timbre.onnx");
     let valence_path = emotion_cache_dir.join("valence.onnx");
     let arousal_path = emotion_cache_dir.join("arousal.onnx");
 
-    // Resample 22050 → 16000 Hz
-    let mono_16k = resample::resample(mono_22050, 22050, SAMPLE_RATE)
-        .context("Failed to resample to 16kHz for quality models")?;
-
-    // Compute mel patches
-    let patches = compute_patches(&mono_16k);
-    if patches.is_empty() {
+    if backbone.n_patches == 0 || backbone.embeddings.is_empty() {
         // Not enough audio — return neutral scores
         return Ok(QualityScores {
             engagement: 0.5,
@@ -244,30 +131,14 @@ pub fn score(
             hit_potential: 5.0,
             mood_dark_to_happy: 0.5,
             mood_aggressive: 0.5,
+            mood_sad: 0.5,
+            mood_acoustic: 0.5,
+            timbre_bright: 0.5,
         });
     }
 
-    let n_patches = patches.len();
-
-    // Build batch tensor [n_patches, PATCH_SIZE, N_MELS]
-    let flat: Vec<f32> = patches.into_iter().flatten().collect();
-    let arr = Array3::<f32>::from_shape_vec((n_patches, PATCH_SIZE, N_MELS), flat)
-        .context("Failed to shape quality backbone input tensor")?;
-
-    // ── Run backbone to extract embeddings ────────────────────────────────────
-    let mut backbone = build_session(&backbone_path)?;
-
-    let input_tensor = Tensor::<f32>::from_array(arr)
-        .map_err(|e| anyhow::anyhow!("Failed to create backbone input tensor: {}", e))?;
-
-    let outputs = backbone
-        .run(ort::inputs![input_tensor])
-        .map_err(|e| anyhow::anyhow!("Backbone ONNX inference failed: {}", e))?;
-
-    // Output 1 is embeddings: [n_patches, 1280]
-    let (_shape, embed_raw) = outputs[1_usize]
-        .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("Failed to extract backbone embeddings: {}", e))?;
+    let n_patches = backbone.n_patches;
+    let embed_raw = &backbone.embeddings;
 
     if embed_raw.len() != n_patches * N_EMBED {
         anyhow::bail!(
@@ -289,20 +160,30 @@ pub fn score(
         *v /= n_f;
     }
 
-    // ── Run the five head models ──────────────────────────────────────────────
+    // ── Run the head models ───────────────────────────────────────────────────
     let mut eng_session = build_session(&engagement_path)?;
     let mut app_session = build_session(&approachability_path)?;
     let mut dan_session = build_session(&danceability_path)?;
     let mut val_session = build_session(&valence_path)?;
     let mut aro_session = build_session(&arousal_path)?;
+    let mut sad_session = build_session(&sad_path)?;
+    let mut acoustic_session = build_session(&acoustic_path)?;
+    let mut timbre_session = build_session(&timbre_path)?;
 
     let engagement = run_regression_head(&mut eng_session, &avg_embed)?;
     let approachability = run_regression_head(&mut app_session, &avg_embed)?;
+    // danceability: [danceable, not_danceable]; index 0 = P(danceable)
     let danceability = run_danceability_head(&mut dan_session, &avg_embed)?;
-    // mood_happy outputs [happy, non_happy]; index 0 = P(happy) = dark_to_happy
+    // mood_happy: [happy, non_happy]; index 0 = P(happy) = dark_to_happy
     let mood_dark_to_happy = run_danceability_head(&mut val_session, &avg_embed)?;
-    // mood_aggressive outputs [aggressive, non_aggressive]; index 0 = P(aggressive)
+    // mood_aggressive: [aggressive, non_aggressive]; index 0 = P(aggressive)
     let mood_aggressive = run_danceability_head(&mut aro_session, &avg_embed)?;
+    // mood_sad: [non_sad, sad]; index 1 = P(sad)
+    let mood_sad = run_softmax_head(&mut sad_session, &avg_embed, 1)?;
+    // mood_acoustic: [acoustic, non_acoustic]; index 0 = P(acoustic)
+    let mood_acoustic = run_softmax_head(&mut acoustic_session, &avg_embed, 0)?;
+    // timbre: [bright, dark]; index 0 = P(bright)
+    let timbre_bright = run_softmax_head(&mut timbre_session, &avg_embed, 0)?;
 
     // Composite hit potential, rounded to 1 decimal place
     let raw_hit = engagement * 0.45 + approachability * 0.35 + danceability * 0.20;
@@ -315,5 +196,8 @@ pub fn score(
         hit_potential,
         mood_dark_to_happy,
         mood_aggressive,
+        mood_sad,
+        mood_acoustic,
+        timbre_bright,
     })
 }

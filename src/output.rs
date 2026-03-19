@@ -58,6 +58,18 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
         "  Aggressive:        {:<15.2} {:.2}",
         reference.quality.mood_aggressive, suno.quality.mood_aggressive
     );
+    println!(
+        "  Sad:               {:<15.2} {:.2}",
+        reference.quality.mood_sad, suno.quality.mood_sad
+    );
+    println!(
+        "  Acoustic:          {:<15.2} {:.2}",
+        reference.quality.mood_acoustic, suno.quality.mood_acoustic
+    );
+    println!(
+        "  Timbre Bright:     {:<15.2} {:.2}",
+        reference.quality.timbre_bright, suno.quality.timbre_bright
+    );
     println!();
     println!("  BPM delta:     {:.2}", diff.bpm.delta_bpm);
     println!(

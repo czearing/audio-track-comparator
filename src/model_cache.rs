@@ -123,6 +123,9 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let quality_engagement = quality_dir.join("engagement.onnx");
     let quality_approachability = quality_dir.join("approachability.onnx");
     let quality_danceability = quality_dir.join("danceability.onnx");
+    let quality_sad = quality_dir.join("sad.onnx");
+    let quality_acoustic = quality_dir.join("acoustic.onnx");
+    let quality_timbre = quality_dir.join("timbre.onnx");
 
     let emotion_dir = emotion_cache_dir();
     let emotion_valence = emotion_dir.join("valence.onnx");
@@ -132,7 +135,8 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let genre_present = genre_onnx.exists() && genre_labels.exists();
     let instrument_present = instrument_onnx.exists() && instrument_labels.exists();
     let quality_present =
-        quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists();
+        quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists()
+        && quality_sad.exists() && quality_acoustic.exists() && quality_timbre.exists();
     let emotion_present = emotion_valence.exists() && emotion_arousal.exists();
 
     if clap_present && genre_present && instrument_present && quality_present && emotion_present {
@@ -184,6 +188,15 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         }
         if !quality_danceability.exists() {
             eprintln!("  {}", quality_danceability.display());
+        }
+        if !quality_sad.exists() {
+            eprintln!("  {}", quality_sad.display());
+        }
+        if !quality_acoustic.exists() {
+            eprintln!("  {}", quality_acoustic.display());
+        }
+        if !quality_timbre.exists() {
+            eprintln!("  {}", quality_timbre.display());
         }
         if !emotion_valence.exists() {
             eprintln!("  {}", emotion_valence.display());
@@ -313,7 +326,9 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
 
         run_script(python, &script, "quality models export");
 
-        if !quality_engagement.exists() || !quality_approachability.exists() || !quality_danceability.exists() {
+        if !quality_engagement.exists() || !quality_approachability.exists() || !quality_danceability.exists()
+            || !quality_sad.exists() || !quality_acoustic.exists() || !quality_timbre.exists()
+        {
             eprintln!("ERROR: Quality export completed but expected files are still missing.");
             if !quality_engagement.exists() {
                 eprintln!("  {}", quality_engagement.display());
@@ -323,6 +338,15 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
             }
             if !quality_danceability.exists() {
                 eprintln!("  {}", quality_danceability.display());
+            }
+            if !quality_sad.exists() {
+                eprintln!("  {}", quality_sad.display());
+            }
+            if !quality_acoustic.exists() {
+                eprintln!("  {}", quality_acoustic.display());
+            }
+            if !quality_timbre.exists() {
+                eprintln!("  {}", quality_timbre.display());
             }
             std::process::exit(1);
         }
