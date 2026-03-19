@@ -1,94 +1,29 @@
 #!/usr/bin/env python3
 """
-Download the Essentia MTT MusiCNN auto-tagging model (ONNX) and its label list.
+Download the Essentia MTG-Jamendo instrument classifier (Discogs-EffNet head).
 
-The model predicts 50 MagnaTagATune tags that cover instruments, genre, and mood.
-We use it purely as an instrument detector by filtering to instrument-relevant tags
-at inference time in the Rust code.
+This model takes 1280-dimensional embeddings from the Discogs-EffNet backbone
+and outputs multi-label sigmoid probabilities over ~40 instrument categories.
 
-Model details:
-  input:  [187, 96]  or  [n_patches, 187, 96]  float32  (mel spectrogram patches)
-  output: [1, 50]    or  [n_patches, 50]        float32  (sigmoid tag probabilities)
+  input:  model/Placeholder  [1280]  float32   (EffNet embedding)
+  output: model/Sigmoid       [N]    float32   (per-instrument probability, 0-1)
 
-Preprocessing (matches TensorflowPredictMusiCNN / TensorflowInputMusiCNN):
-  sample_rate = 16000
-  frame_size  = 512    (FFT window)
-  hop_size    = 256
-  n_mels      = 96
-  patch_size  = 187    (frames per model input patch)
-  patch_hop   = 93     (frames between patch starts, 50% overlap)
+Uses the same Discogs-EffNet backbone already run for genre/quality — no extra
+preprocessing or resampling required.
 
 Files saved to ~/.cache/audio-track-comparator/instruments/:
   instrument_detector.onnx   — the ONNX model
-  instrument_labels.json     — ordered list of 50 tag strings
+  instrument_labels.json     — ordered list of instrument class names
 """
 
 import json
-import os
 import sys
 import urllib.request
 from pathlib import Path
 
-ONNX_URL = (
-    "https://essentia.upf.edu/models/autotagging/mtt/mtt-musicnn-1.onnx"
-)
-
-# All 50 MagnaTagATune labels in model output order (index 0..49).
-# Sourced from mtt-musicnn-1.json at essentia.upf.edu.
-LABELS = [
-    "guitar",
-    "classical",
-    "slow",
-    "techno",
-    "strings",
-    "drums",
-    "electronic",
-    "rock",
-    "fast",
-    "piano",
-    "ambient",
-    "beat",
-    "violin",
-    "vocal",
-    "synth",
-    "female",
-    "indian",
-    "opera",
-    "male",
-    "singing",
-    "vocals",
-    "no vocals",
-    "harpsichord",
-    "loud",
-    "quiet",
-    "flute",
-    "woman",
-    "male vocal",
-    "no vocal",
-    "pop",
-    "soft",
-    "sitar",
-    "solo",
-    "man",
-    "classic",
-    "choir",
-    "voice",
-    "new age",
-    "dance",
-    "male voice",
-    "female vocal",
-    "beats",
-    "harp",
-    "cello",
-    "no voice",
-    "weird",
-    "country",
-    "metal",
-    "female voice",
-    "choral",
-]
-
-assert len(LABELS) == 50, f"Expected 50 labels, got {len(LABELS)}"
+BASE_URL = "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument"
+ONNX_URL = f"{BASE_URL}/mtg_jamendo_instrument-discogs-effnet-1.onnx"
+META_URL = f"{BASE_URL}/mtg_jamendo_instrument-discogs-effnet-1.json"
 
 
 def download_with_progress(url: str, dest: Path) -> None:
@@ -114,30 +49,39 @@ def main() -> None:
     onnx_path = cache_dir / "instrument_detector.onnx"
     labels_path = cache_dir / "instrument_labels.json"
 
-    # Save labels
-    if not labels_path.exists():
-        print(f"Writing instrument labels -> {labels_path}")
-        labels_path.write_text(json.dumps(LABELS, indent=2, ensure_ascii=False))
-    else:
-        print(f"Labels already present: {labels_path}")
-
     # Download ONNX model
     if not onnx_path.exists():
         download_with_progress(ONNX_URL, onnx_path)
     else:
-        size_mb = onnx_path.stat().st_size / 1_048_576
-        print(f"ONNX model already present ({size_mb:.1f} MB): {onnx_path}")
+        size_kb = onnx_path.stat().st_size / 1024
+        print(f"Already present ({size_kb:.0f} KB): {onnx_path}")
 
-    # Basic sanity check
-    size_mb = onnx_path.stat().st_size / 1_048_576
-    if size_mb < 1:
-        print(f"ERROR: ONNX file seems too small ({size_mb:.1f} MB). Download may have failed.")
+    size_kb = onnx_path.stat().st_size / 1024
+    if size_kb < 50:
+        print(f"ERROR: ONNX file too small ({size_kb:.0f} KB). Download may have failed.")
         sys.exit(1)
+
+    # Download metadata JSON and extract class labels
+    if not labels_path.exists():
+        meta_dest = cache_dir / "_meta.json"
+        download_with_progress(META_URL, meta_dest)
+        meta = json.loads(meta_dest.read_text())
+        classes = meta.get("classes", meta.get("tags", []))
+        if not classes:
+            print("ERROR: Could not find 'classes' key in metadata JSON.")
+            print(f"Keys present: {list(meta.keys())}")
+            sys.exit(1)
+        labels_path.write_text(json.dumps(classes, indent=2, ensure_ascii=False))
+        meta_dest.unlink()
+        print(f"Wrote {len(classes)} instrument labels -> {labels_path}")
+    else:
+        classes = json.loads(labels_path.read_text())
+        print(f"Labels already present ({len(classes)} classes): {labels_path}")
 
     print()
     print("Instrument model ready.")
-    print(f"  ONNX:   {onnx_path}")
-    print(f"  Labels: {labels_path}")
+    print(f"  ONNX:   {onnx_path}  ({onnx_path.stat().st_size / 1024:.0f} KB)")
+    print(f"  Labels: {labels_path}  ({len(classes)} classes)")
 
 
 if __name__ == "__main__":
