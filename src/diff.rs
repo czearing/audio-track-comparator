@@ -7,6 +7,8 @@ pub struct QualityDiff {
     pub approachability_delta: f32,
     pub danceability_delta: f32,
     pub hit_potential_delta: f32,
+    pub mood_dark_to_happy_delta: f32,
+    pub mood_aggressive_delta: f32,
 }
 
 #[derive(Serialize)]
@@ -101,6 +103,10 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
         round2(suno.quality.approachability - reference.quality.approachability);
     let danceability_delta = round2(suno.quality.danceability - reference.quality.danceability);
     let hit_potential_delta = round2(suno.quality.hit_potential - reference.quality.hit_potential);
+    let mood_dark_to_happy_delta =
+        round2(suno.quality.mood_dark_to_happy - reference.quality.mood_dark_to_happy);
+    let mood_aggressive_delta =
+        round2(suno.quality.mood_aggressive - reference.quality.mood_aggressive);
 
     Diff {
         bpm: BpmDiff {
@@ -156,6 +162,8 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis) -> Diff {
             approachability_delta,
             danceability_delta,
             hit_potential_delta,
+            mood_dark_to_happy_delta,
+            mood_aggressive_delta,
         },
     }
 }

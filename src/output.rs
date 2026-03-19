@@ -50,6 +50,14 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
         "  Danceability:  {:<18.2} {:.2}",
         reference.quality.danceability, suno.quality.danceability
     );
+    println!(
+        "  Dark -> Happy: {:<18.2} {:.2}",
+        reference.quality.mood_dark_to_happy, suno.quality.mood_dark_to_happy
+    );
+    println!(
+        "  Aggressive:        {:<15.2} {:.2}",
+        reference.quality.mood_aggressive, suno.quality.mood_aggressive
+    );
     println!();
     println!("  BPM delta:     {:.2}", diff.bpm.delta_bpm);
     println!(

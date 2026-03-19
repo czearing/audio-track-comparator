@@ -6,6 +6,7 @@ pub struct ModelPaths {
     pub genre_onnx: PathBuf,
     pub instrument_onnx: PathBuf,
     pub quality_dir: PathBuf,
+    pub emotion_dir: PathBuf,
 }
 
 fn cache_dir() -> PathBuf {
@@ -38,6 +39,14 @@ fn quality_cache_dir() -> PathBuf {
         .join(".cache")
         .join("audio-track-comparator")
         .join("quality")
+}
+
+fn emotion_cache_dir() -> PathBuf {
+    dirs::home_dir()
+        .expect("Cannot determine home directory")
+        .join(".cache")
+        .join("audio-track-comparator")
+        .join("emotion")
 }
 
 /// Locate an export script relative to the running binary, falling back to cwd.
@@ -115,23 +124,30 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let quality_approachability = quality_dir.join("approachability.onnx");
     let quality_danceability = quality_dir.join("danceability.onnx");
 
+    let emotion_dir = emotion_cache_dir();
+    let emotion_valence = emotion_dir.join("valence.onnx");
+    let emotion_arousal = emotion_dir.join("arousal.onnx");
+
     let clap_present = audio_encoder.exists() && text_embeddings.exists();
     let genre_present = genre_onnx.exists() && genre_labels.exists();
     let instrument_present = instrument_onnx.exists() && instrument_labels.exists();
     let quality_present =
         quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists();
+    let emotion_present = emotion_valence.exists() && emotion_arousal.exists();
 
-    if clap_present && genre_present && instrument_present && quality_present {
+    if clap_present && genre_present && instrument_present && quality_present && emotion_present {
         println!("CLAP model cache:       {}", clap_dir.display());
         println!("Genre model cache:      {}", genre_dir.display());
         println!("Instrument model cache: {}", instrument_dir.display());
         println!("Quality model cache:    {}", quality_dir.display());
+        println!("Emotion model cache:    {}", emotion_dir.display());
         return Ok(ModelPaths {
             audio_encoder,
             text_embeddings,
             genre_onnx,
             instrument_onnx,
             quality_dir,
+            emotion_dir,
         });
     }
 
@@ -168,6 +184,12 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         }
         if !quality_danceability.exists() {
             eprintln!("  {}", quality_danceability.display());
+        }
+        if !emotion_valence.exists() {
+            eprintln!("  {}", emotion_valence.display());
+        }
+        if !emotion_arousal.exists() {
+            eprintln!("  {}", emotion_arousal.display());
         }
         std::process::exit(1);
     }
@@ -308,10 +330,42 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         println!("Quality models downloaded successfully.");
     }
 
+    // Download emotion models if needed
+    if !emotion_present {
+        println!("Downloading Essentia emotion models (mood_happy / mood_relaxed)...");
+        println!("(One-time setup. Models will be cached for future runs.)");
+        println!();
+
+        let script = match find_script("export_emotion_models.py") {
+            Some(p) => p,
+            None => {
+                eprintln!("ERROR: Could not find scripts/export_emotion_models.py.");
+                eprintln!("Ensure you are running from the project root directory.");
+                std::process::exit(1);
+            }
+        };
+
+        run_script(python, &script, "emotion models export");
+
+        if !emotion_valence.exists() || !emotion_arousal.exists() {
+            eprintln!("ERROR: Emotion export completed but expected files are still missing.");
+            if !emotion_valence.exists() {
+                eprintln!("  {}", emotion_valence.display());
+            }
+            if !emotion_arousal.exists() {
+                eprintln!("  {}", emotion_arousal.display());
+            }
+            std::process::exit(1);
+        }
+        println!();
+        println!("Emotion models downloaded successfully.");
+    }
+
     println!("CLAP model cache:       {}", clap_dir.display());
     println!("Genre model cache:      {}", genre_dir.display());
     println!("Instrument model cache: {}", instrument_dir.display());
     println!("Quality model cache:    {}", quality_dir.display());
+    println!("Emotion model cache:    {}", emotion_dir.display());
 
     Ok(ModelPaths {
         audio_encoder,
@@ -319,5 +373,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         genre_onnx,
         instrument_onnx,
         quality_dir,
+        emotion_dir,
     })
 }

@@ -45,10 +45,11 @@ pub fn analyze_file(path: &Path, model_paths: &ModelPaths) -> anyhow::Result<Tra
     println!("  Running CLAP inference ...");
     let (tags, melody) = crate::clap_model::compute_tags(&samples_48000, model_paths, instruments, genre)?;
 
-    println!("  Scoring quality (engagement / approachability / danceability) ...");
+    println!("  Scoring quality and emotion (engagement / approachability / danceability / mood) ...");
     let genre_cache = model_paths.genre_onnx.parent().expect("genre_onnx has no parent");
     let quality_cache = model_paths.quality_dir.as_path();
-    let quality = crate::quality::score(&samples_22050, genre_cache, quality_cache)?;
+    let emotion_cache = model_paths.emotion_dir.as_path();
+    let quality = crate::quality::score(&samples_22050, genre_cache, quality_cache, emotion_cache)?;
 
     Ok(TrackAnalysis {
         bpm_bpm,

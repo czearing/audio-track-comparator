@@ -35,6 +35,8 @@ pub struct QualityScores {
     pub approachability: f32,
     pub danceability: f32,
     pub hit_potential: f32,
+    pub mood_dark_to_happy: f32, // 0=very dark, 1=very happy
+    pub mood_aggressive: f32,    // 0=not aggressive, 1=very aggressive
 }
 
 // ── mel preprocessing (identical parameters to genre.rs) ─────────────────────
@@ -212,15 +214,20 @@ fn run_danceability_head(session: &mut Session, embedding: &[f32; N_EMBED]) -> a
 /// `genre_cache_dir` must contain `discogs_genre.onnx` (backbone).
 /// `quality_cache_dir` must contain `engagement.onnx`, `approachability.onnx`,
 /// `danceability.onnx`.
+/// `emotion_cache_dir` must contain `valence.onnx` (mood_happy) and
+/// `arousal.onnx` (mood_relaxed).
 pub fn score(
     mono_22050: &[f32],
     genre_cache_dir: &Path,
     quality_cache_dir: &Path,
+    emotion_cache_dir: &Path,
 ) -> anyhow::Result<QualityScores> {
     let backbone_path = genre_cache_dir.join("discogs_genre.onnx");
     let engagement_path = quality_cache_dir.join("engagement.onnx");
     let approachability_path = quality_cache_dir.join("approachability.onnx");
     let danceability_path = quality_cache_dir.join("danceability.onnx");
+    let valence_path = emotion_cache_dir.join("valence.onnx");
+    let arousal_path = emotion_cache_dir.join("arousal.onnx");
 
     // Resample 22050 → 16000 Hz
     let mono_16k = resample::resample(mono_22050, 22050, SAMPLE_RATE)
@@ -235,6 +242,8 @@ pub fn score(
             approachability: 0.5,
             danceability: 0.5,
             hit_potential: 5.0,
+            mood_dark_to_happy: 0.5,
+            mood_aggressive: 0.5,
         });
     }
 
@@ -280,14 +289,20 @@ pub fn score(
         *v /= n_f;
     }
 
-    // ── Run the three head models ─────────────────────────────────────────────
+    // ── Run the five head models ──────────────────────────────────────────────
     let mut eng_session = build_session(&engagement_path)?;
     let mut app_session = build_session(&approachability_path)?;
     let mut dan_session = build_session(&danceability_path)?;
+    let mut val_session = build_session(&valence_path)?;
+    let mut aro_session = build_session(&arousal_path)?;
 
     let engagement = run_regression_head(&mut eng_session, &avg_embed)?;
     let approachability = run_regression_head(&mut app_session, &avg_embed)?;
     let danceability = run_danceability_head(&mut dan_session, &avg_embed)?;
+    // mood_happy outputs [happy, non_happy]; index 0 = P(happy) = dark_to_happy
+    let mood_dark_to_happy = run_danceability_head(&mut val_session, &avg_embed)?;
+    // mood_aggressive outputs [aggressive, non_aggressive]; index 0 = P(aggressive)
+    let mood_aggressive = run_danceability_head(&mut aro_session, &avg_embed)?;
 
     // Composite hit potential, rounded to 1 decimal place
     let raw_hit = engagement * 0.45 + approachability * 0.35 + danceability * 0.20;
@@ -298,5 +313,7 @@ pub fn score(
         approachability,
         danceability,
         hit_potential,
+        mood_dark_to_happy,
+        mood_aggressive,
     })
 }
