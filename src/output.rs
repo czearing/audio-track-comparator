@@ -85,6 +85,10 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
         diff.key.match_, diff.key.distance_semitones
     );
     println!("  Energy match:  {}", diff.tags.energy_match);
+    println!(
+        "  VGGish similarity: {:.1}%",
+        diff.vggish_similarity_pct
+    );
     println!();
 }
 
