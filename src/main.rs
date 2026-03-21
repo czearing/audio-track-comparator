@@ -91,13 +91,13 @@ fn run() -> anyhow::Result<()> {
     println!("\nAnalyzing suno: {}", cli.suno.display());
     let suno_analysis = pipeline::analyze_file(&cli.suno, &model_paths)?;
 
-    // Compute VGGish similarity
-    println!("\nComputing VGGish similarity...");
-    let vggish_similarity_pct =
-        similarity::compute(&cli.reference, &cli.suno, &model_paths.vggish_onnx)?;
+    // Compute Music similarity
+    println!("\nComputing Music similarity...");
+    let similarity_pct =
+        similarity::compute(&cli.reference, &cli.suno, &model_paths.similarity_onnx)?;
 
     // Compute diff
-    let diff = diff::compute(&ref_analysis, &suno_analysis, vggish_similarity_pct);
+    let diff = diff::compute(&ref_analysis, &suno_analysis, similarity_pct);
 
     // Print summary before file write (AC-37)
     output::print_summary(&ref_analysis, &suno_analysis, &diff);

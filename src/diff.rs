@@ -56,7 +56,7 @@ pub struct Diff {
     pub tags: TagsDiff,
     pub melody: MelodyDiff,
     pub quality: QualityDiff,
-    pub vggish_similarity_pct: f32,
+    pub similarity_pct: f32,
 }
 
 fn set_diff_static<'a>(
@@ -88,7 +88,7 @@ fn pitch_class_index(root: &str) -> u8 {
     }
 }
 
-pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis, vggish_similarity_pct: f32) -> Diff {
+pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis, similarity_pct: f32) -> Diff {
     // BPM diff — round delta to 2 decimal places
     let delta_bpm = ((suno.bpm_bpm - reference.bpm_bpm) as f64 * 100.0).round() as f32 / 100.0;
 
@@ -182,6 +182,6 @@ pub fn compute(reference: &TrackAnalysis, suno: &TrackAnalysis, vggish_similarit
             mood_party_delta,
             mood_electronic_delta,
         },
-        vggish_similarity_pct,
+        similarity_pct,
     }
 }

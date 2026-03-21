@@ -86,8 +86,8 @@ pub fn print_summary(reference: &TrackAnalysis, suno: &TrackAnalysis, diff: &Dif
     );
     println!("  Energy match:  {}", diff.tags.energy_match);
     println!(
-        "  VGGish similarity: {:.1}%",
-        diff.vggish_similarity_pct
+        "  Music similarity: {:.1}%",
+        diff.similarity_pct
     );
     println!();
 }

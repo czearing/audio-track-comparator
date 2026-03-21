@@ -1,38 +1,38 @@
-/// VGGish-based acoustic similarity.
+/// Discogs-EffNet contrastive similarity.
 ///
-/// Model: vggish.onnx
-///   Input:  [N, 1, 96, 64]  float32  (N patches, 1 channel, 96 time frames, 64 mel bins)
-///   Output: [N, 128]     float32  (one 128-dim embedding per patch)
+/// Model: similarity.onnx  (discogs_multi_embeddings-effnet-bs64-1.onnx)
+///   Input:  [64, 128, 96]  float32  (fixed batch of 64 mel patches)
+///   Output: [64, 1280]     float32  (contrastive embeddings per patch)
 ///
-/// Preprocessing (matches VGGish original):
+/// Trained with a contrastive objective grouping tracks by artist and track
+/// associations — purpose-built for music similarity, not audio event
+/// classification. Preprocessing is identical to the Discogs-EffNet
+/// classification backbone (backbone.rs):
 ///   sample_rate = 16 000 Hz
-///   window      = 25 ms Hann  (400 samples)
-///   hop         = 10 ms       (160 samples)
-///   n_mels      = 64
-///   f_min       = 125 Hz
-///   f_max       = 7 500 Hz
-///   patch_size  = 96 frames   (non-overlapping — patch hop equals patch size)
-///   log         = log10(x + 0.01)
+///   frame_size  = 512 samples
+///   hop_size    = 256 samples
+///   n_mels      = 96
+///   patch_size  = 128 frames
 use crate::{decode, resample};
 use anyhow::Context;
-use ndarray::Array4;
+use ndarray::Array3;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use std::path::Path;
 
-const VGGISH_SAMPLE_RATE: u32 = 16_000;
-const FRAME_SIZE: usize = 400; // 25 ms at 16 kHz
-const HOP_SIZE: usize = 160; // 10 ms at 16 kHz
-const N_MELS: usize = 64;
-const PATCH_SIZE: usize = 96; // time frames per patch
-const F_MIN: f64 = 125.0;
-const F_MAX: f64 = 7_500.0;
+const SAMPLE_RATE: u32 = 16_000;
+const FRAME_SIZE: usize = 512;
+const HOP_SIZE: usize = 256;
+const N_MELS: usize = 96;
+const PATCH_SIZE: usize = 128;
+const N_EMBED: usize = 1280;
+const BATCH_SIZE: usize = 64; // model has fixed batch size
+const F_MIN: f64 = 0.0;
+const F_MAX: f64 = 8_000.0;
 
-/// Build a linear-scale mel filterbank [N_MELS, FRAME_SIZE/2+1].
-/// Uses HTK-style Hz→mel conversion: mel = 2595 * log10(1 + f/700).
 fn build_mel_filterbank() -> Vec<Vec<f32>> {
     let n_freqs = FRAME_SIZE / 2 + 1;
-    let sr = VGGISH_SAMPLE_RATE as f64;
+    let sr = SAMPLE_RATE as f64;
 
     fn hz_to_mel(f: f64) -> f64 {
         2595.0 * (1.0 + f / 700.0).log10()
@@ -43,13 +43,11 @@ fn build_mel_filterbank() -> Vec<Vec<f32>> {
 
     let mel_min = hz_to_mel(F_MIN);
     let mel_max = hz_to_mel(F_MAX);
-
     let n_pts = N_MELS + 2;
     let mel_points: Vec<f64> = (0..n_pts)
         .map(|i| mel_min + (mel_max - mel_min) * i as f64 / (n_pts - 1) as f64)
         .collect();
     let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
-
     let fft_freqs: Vec<f64> = (0..n_freqs)
         .map(|k| k as f64 * sr / FRAME_SIZE as f64)
         .collect();
@@ -59,7 +57,6 @@ fn build_mel_filterbank() -> Vec<Vec<f32>> {
         let lower = hz_points[m];
         let center = hz_points[m + 1];
         let upper = hz_points[m + 2];
-        // Slaney area normalization: 2 / (upper - lower) in Hz
         let norm = if upper > lower { 2.0 / (upper - lower) } else { 1.0 };
         let mut row = vec![0.0f32; n_freqs];
         for k in 0..n_freqs {
@@ -77,46 +74,37 @@ fn build_mel_filterbank() -> Vec<Vec<f32>> {
     fb
 }
 
-/// VGGish log compression: log10(x + 0.01).
 #[inline]
 fn log_compression(x: f32) -> f32 {
-    (x + 0.01).log10()
+    (10000.0 * x + 1.0).log10()
 }
 
-/// Compute VGGish log-mel patches from 16 kHz mono audio.
-/// Returns a Vec of patches, each of shape [PATCH_SIZE × N_MELS] (row-major).
-/// Patches are non-overlapping: patch hop equals PATCH_SIZE.
 fn compute_patches(mono_16k: &[f32]) -> Vec<Vec<f32>> {
     use rustfft::{num_complex::Complex, FftPlanner};
 
     let n_freqs = FRAME_SIZE / 2 + 1;
     let filterbank = build_mel_filterbank();
-
-    // Hann window
     let window: Vec<f32> = (0..FRAME_SIZE)
         .map(|i| {
-            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (FRAME_SIZE - 1) as f32).cos())
+            0.5 * (1.0
+                - (2.0 * std::f32::consts::PI * i as f32 / (FRAME_SIZE - 1) as f32).cos())
         })
         .collect();
 
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FRAME_SIZE);
 
-    // Number of STFT frames
     let n_frames = if mono_16k.len() >= FRAME_SIZE {
         (mono_16k.len() - FRAME_SIZE) / HOP_SIZE + 1
     } else {
         0
     };
-
     if n_frames == 0 {
         return Vec::new();
     }
 
-    // Compute mel frames: mel_frames[frame][mel_bin]
     let mut mel_frames: Vec<Vec<f32>> = Vec::with_capacity(n_frames);
     let mut buf: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); FRAME_SIZE];
-
     for frame_idx in 0..n_frames {
         let start = frame_idx * HOP_SIZE;
         for i in 0..FRAME_SIZE {
@@ -124,11 +112,7 @@ fn compute_patches(mono_16k: &[f32]) -> Vec<Vec<f32>> {
             buf[i] = Complex::new(s * window[i], 0.0);
         }
         fft.process(&mut buf);
-
-        // Power spectrum [n_freqs]
         let power: Vec<f32> = (0..n_freqs).map(|k| buf[k].norm_sqr()).collect();
-
-        // Project to mel and apply log compression
         let mel: Vec<f32> = filterbank
             .iter()
             .map(|row| {
@@ -136,140 +120,150 @@ fn compute_patches(mono_16k: &[f32]) -> Vec<Vec<f32>> {
                 log_compression(v)
             })
             .collect();
-
         mel_frames.push(mel);
     }
 
-    // Split into non-overlapping patches of PATCH_SIZE frames
-    if n_frames < PATCH_SIZE {
+    let n_patches = n_frames / PATCH_SIZE;
+    if n_patches == 0 {
         return Vec::new();
     }
 
-    let mut patches: Vec<Vec<f32>> = Vec::new();
-    let mut start = 0;
-    while start + PATCH_SIZE <= n_frames {
-        // patch layout: [PATCH_SIZE, N_MELS] row-major
+    let mut patches: Vec<Vec<f32>> = Vec::with_capacity(n_patches);
+    for p in 0..n_patches {
         let mut patch = Vec::with_capacity(PATCH_SIZE * N_MELS);
         for f in 0..PATCH_SIZE {
-            patch.extend_from_slice(&mel_frames[start + f]);
+            patch.extend_from_slice(&mel_frames[p * PATCH_SIZE + f]);
         }
         patches.push(patch);
-        start += PATCH_SIZE; // non-overlapping
     }
     patches
 }
 
-/// Compute the mean-pooled 128-dim VGGish embedding for a 16 kHz mono signal.
-fn embed(mono_16k: &[f32], onnx_path: &Path) -> anyhow::Result<Vec<f32>> {
-    let patches = compute_patches(mono_16k);
+/// Sample up to BATCH_SIZE patches evenly from the track, pad to exactly
+/// BATCH_SIZE with zeros if fewer patches exist. Returns the flat batch
+/// and the number of real (non-padded) patches.
+fn prepare_batch(patches: Vec<Vec<f32>>) -> (Vec<f32>, usize) {
+    let _n_real = patches.len().min(BATCH_SIZE);
+    let patch_len = PATCH_SIZE * N_MELS;
 
-    if patches.is_empty() {
-        anyhow::bail!("Audio too short for VGGish patches");
+    // Evenly sample n_real indices from patches
+    let selected: Vec<Vec<f32>> = if patches.len() <= BATCH_SIZE {
+        patches
+    } else {
+        (0..BATCH_SIZE)
+            .map(|i| {
+                let idx = i * (patches.len() - 1) / (BATCH_SIZE - 1);
+                patches[idx].clone()
+            })
+            .collect()
+    };
+
+    let n_selected = selected.len();
+    let mut flat = vec![0.0f32; BATCH_SIZE * patch_len];
+    for (i, patch) in selected.into_iter().enumerate() {
+        flat[i * patch_len..(i + 1) * patch_len].copy_from_slice(&patch);
     }
 
-    let n_patches = patches.len();
-
-    // Build batch tensor [n_patches, 1, PATCH_SIZE, N_MELS] — VGGish expects a channel dim
-    let flat: Vec<f32> = patches.into_iter().flatten().collect();
-    let arr = Array4::<f32>::from_shape_vec((n_patches, 1, PATCH_SIZE, N_MELS), flat)
-        .context("Failed to shape VGGish input tensor")?;
-
-    // Load ONNX session
-    let mut session = Session::builder()
-        .map_err(|e| anyhow::anyhow!("Failed to create ORT session builder: {}", e))?
-        .with_optimization_level(GraphOptimizationLevel::All)
-        .map_err(|e| anyhow::anyhow!("Failed to set optimization level: {}", e))?
-        .with_intra_threads(num_cpus())
-        .map_err(|e| anyhow::anyhow!("Failed to set thread count: {}", e))?
-        .commit_from_file(onnx_path)
-        .map_err(|e| anyhow::anyhow!("Failed to load VGGish ONNX model: {}", e))?;
-
-    // Run inference
-    let input_tensor = Tensor::<f32>::from_array(arr)
-        .map_err(|e| anyhow::anyhow!("Failed to create VGGish input tensor: {}", e))?;
-
-    let outputs = session
-        .run(ort::inputs![input_tensor])
-        .map_err(|e| anyhow::anyhow!("VGGish ONNX inference failed: {}", e))?;
-
-    // Output 0 is [n_patches, 128] embeddings
-    let (_shape, raw) = outputs[0_usize]
-        .try_extract_tensor::<f32>()
-        .map_err(|e| anyhow::anyhow!("Failed to extract VGGish output tensor: {}", e))?;
-
-    const EMBED_DIM: usize = 128;
-    let total_elements = raw.len();
-    if total_elements != n_patches * EMBED_DIM {
-        anyhow::bail!(
-            "VGGish model output size mismatch: expected {}, got {}",
-            n_patches * EMBED_DIM,
-            total_elements
-        );
-    }
-
-    // Mean-pool across patches
-    let mut mean_embedding = vec![0.0f32; EMBED_DIM];
-    for p in 0..n_patches {
-        for d in 0..EMBED_DIM {
-            mean_embedding[d] += raw[p * EMBED_DIM + d];
-        }
-    }
-    let n_f = n_patches as f32;
-    for v in mean_embedding.iter_mut() {
-        *v /= n_f;
-    }
-
-    Ok(mean_embedding)
-}
-
-/// Compute cosine similarity between two VGGish embeddings, scaled to a percentage.
-///
-/// Returns a value in [0.0, 100.0] rounded to one decimal place.
-pub fn compute(ref_path: &Path, suno_path: &Path, onnx_path: &Path) -> anyhow::Result<f32> {
-    // Decode and resample reference
-    let ref_buf = decode::decode_mp3(ref_path)
-        .with_context(|| format!("Failed to decode reference: {}", ref_path.display()))?;
-    let ref_mono = resample::to_mono(&ref_buf);
-    let ref_16k = resample::resample(&ref_mono, ref_buf.sample_rate, VGGISH_SAMPLE_RATE)
-        .context("Failed to resample reference to 16 kHz")?;
-
-    // Decode and resample suno
-    let suno_buf = decode::decode_mp3(suno_path)
-        .with_context(|| format!("Failed to decode suno: {}", suno_path.display()))?;
-    let suno_mono = resample::to_mono(&suno_buf);
-    let suno_16k = resample::resample(&suno_mono, suno_buf.sample_rate, VGGISH_SAMPLE_RATE)
-        .context("Failed to resample suno to 16 kHz")?;
-
-    // Compute embeddings
-    let ref_emb = embed(&ref_16k, onnx_path).context("Failed to embed reference track")?;
-    let suno_emb = embed(&suno_16k, onnx_path).context("Failed to embed suno track")?;
-
-    // Guard against silent / near-silent audio
-    let ref_norm: f32 = ref_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let suno_norm: f32 = suno_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if ref_norm < 1e-8 {
-        anyhow::bail!("Reference audio is silent or near-silent — VGGish embedding is zero");
-    }
-    if suno_norm < 1e-8 {
-        anyhow::bail!("Suno audio is silent or near-silent — VGGish embedding is zero");
-    }
-
-    // Cosine similarity
-    let dot: f32 = ref_emb
-        .iter()
-        .zip(suno_emb.iter())
-        .map(|(a, b)| a * b)
-        .sum();
-    let similarity = dot / (ref_norm * suno_norm);
-
-    // Scale to percentage, clamp, and round to 1 decimal place
-    let score = (similarity * 100.0).clamp(0.0, 100.0);
-    let score = (score * 10.0).round() / 10.0;
-    Ok(score)
+    (flat, n_selected)
 }
 
 fn num_cpus() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
+}
+
+/// Run the contrastive model on a batch, return mean-pooled [N_EMBED] embedding
+/// using only the first `n_real` rows of the output.
+fn embed(mono_22050: &[f32], onnx_path: &Path) -> anyhow::Result<Vec<f32>> {
+    let mono_16k = resample::resample(mono_22050, 22050, SAMPLE_RATE)
+        .context("Failed to resample to 16kHz for similarity model")?;
+
+    let patches = compute_patches(&mono_16k);
+    if patches.is_empty() {
+        anyhow::bail!("Audio too short to compute similarity patches");
+    }
+
+    let (flat, n_real) = prepare_batch(patches);
+
+    let arr = Array3::<f32>::from_shape_vec((BATCH_SIZE, PATCH_SIZE, N_MELS), flat)
+        .context("Failed to shape similarity input tensor")?;
+
+    let mut session = Session::builder()
+        .map_err(|e| anyhow::anyhow!("ORT session builder error: {}", e))?
+        .with_optimization_level(GraphOptimizationLevel::All)
+        .map_err(|e| anyhow::anyhow!("ORT optimization level error: {}", e))?
+        .with_intra_threads(num_cpus())
+        .map_err(|e| anyhow::anyhow!("ORT thread count error: {}", e))?
+        .commit_from_file(onnx_path)
+        .map_err(|e| anyhow::anyhow!("Failed to load similarity ONNX model: {}", e))?;
+
+    let tensor = Tensor::<f32>::from_array(arr)
+        .map_err(|e| anyhow::anyhow!("Failed to create similarity input tensor: {}", e))?;
+
+    let outputs = session
+        .run(ort::inputs![tensor])
+        .map_err(|e| anyhow::anyhow!("Similarity ONNX inference failed: {}", e))?;
+
+    let (_shape, raw) = outputs[0_usize]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| anyhow::anyhow!("Failed to extract similarity output tensor: {}", e))?;
+
+    if raw.len() != BATCH_SIZE * N_EMBED {
+        anyhow::bail!(
+            "Similarity model output size mismatch: expected {}, got {}",
+            BATCH_SIZE * N_EMBED,
+            raw.len()
+        );
+    }
+
+    // Mean-pool only over real (non-padded) patches
+    let mut mean_embed = vec![0.0f32; N_EMBED];
+    for p in 0..n_real {
+        for d in 0..N_EMBED {
+            mean_embed[d] += raw[p * N_EMBED + d];
+        }
+    }
+    let n_f = n_real as f32;
+    for v in mean_embed.iter_mut() {
+        *v /= n_f;
+    }
+
+    Ok(mean_embed)
+}
+
+/// Compute Discogs-EffNet contrastive similarity between two tracks.
+/// Returns a score in [0.0, 100.0] rounded to one decimal place.
+pub fn compute(ref_path: &Path, suno_path: &Path, onnx_path: &Path) -> anyhow::Result<f32> {
+    let ref_buf = decode::decode_mp3(ref_path)
+        .with_context(|| format!("Failed to decode reference: {}", ref_path.display()))?;
+    let ref_mono = resample::to_mono(&ref_buf);
+
+    let suno_buf = decode::decode_mp3(suno_path)
+        .with_context(|| format!("Failed to decode suno: {}", suno_path.display()))?;
+    let suno_mono = resample::to_mono(&suno_buf);
+
+    // Resample both to 22050 Hz (embed() resamples internally to 16kHz)
+    let ref_22k = resample::resample(&ref_mono, ref_buf.sample_rate, 22050)
+        .context("Failed to resample reference to 22050 Hz")?;
+    let suno_22k = resample::resample(&suno_mono, suno_buf.sample_rate, 22050)
+        .context("Failed to resample suno to 22050 Hz")?;
+
+    let ref_emb = embed(&ref_22k, onnx_path).context("Failed to embed reference track")?;
+    let suno_emb = embed(&suno_22k, onnx_path).context("Failed to embed suno track")?;
+
+    let ref_norm: f32 = ref_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let suno_norm: f32 = suno_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if ref_norm < 1e-8 {
+        anyhow::bail!("Reference audio is silent — embedding norm is zero");
+    }
+    if suno_norm < 1e-8 {
+        anyhow::bail!("Suno audio is silent — embedding norm is zero");
+    }
+
+    let dot: f32 = ref_emb.iter().zip(suno_emb.iter()).map(|(a, b)| a * b).sum();
+    let similarity = dot / (ref_norm * suno_norm);
+
+    let score = (similarity * 100.0).clamp(0.0, 100.0);
+    Ok((score * 10.0).round() / 10.0)
 }

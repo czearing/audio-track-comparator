@@ -7,7 +7,7 @@ pub struct ModelPaths {
     pub instrument_onnx: PathBuf,
     pub quality_dir: PathBuf,
     pub emotion_dir: PathBuf,
-    pub vggish_onnx: PathBuf,
+    pub similarity_onnx: PathBuf,
 }
 
 fn cache_dir() -> PathBuf {
@@ -50,12 +50,12 @@ fn emotion_cache_dir() -> PathBuf {
         .join("emotion")
 }
 
-fn vggish_cache_dir() -> PathBuf {
+fn similarity_cache_dir() -> PathBuf {
     dirs::home_dir()
         .expect("Cannot determine home directory")
         .join(".cache")
         .join("audio-track-comparator")
-        .join("vggish")
+        .join("similarity")
 }
 
 /// Locate an export script relative to the running binary, falling back to cwd.
@@ -140,8 +140,8 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     let emotion_valence = emotion_dir.join("valence.onnx");
     let emotion_arousal = emotion_dir.join("arousal.onnx");
 
-    let vggish_dir = vggish_cache_dir();
-    let vggish_onnx = vggish_dir.join("vggish.onnx");
+    let similarity_dir = similarity_cache_dir();
+    let similarity_onnx = similarity_dir.join("similarity.onnx");
 
     let clap_present = audio_encoder.exists() && text_embeddings.exists();
     let genre_present = genre_onnx.exists() && genre_labels.exists();
@@ -150,15 +150,15 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         quality_engagement.exists() && quality_approachability.exists() && quality_danceability.exists()
         && quality_sad.exists() && quality_acoustic.exists() && quality_timbre.exists();
     let emotion_present = emotion_valence.exists() && emotion_arousal.exists();
-    let vggish_present = vggish_onnx.exists();
+    let similarity_present = similarity_onnx.exists();
 
-    if clap_present && genre_present && instrument_present && quality_present && emotion_present && vggish_present {
+    if clap_present && genre_present && instrument_present && quality_present && emotion_present && similarity_present {
         println!("CLAP model cache:       {}", clap_dir.display());
         println!("Genre model cache:      {}", genre_dir.display());
         println!("Instrument model cache: {}", instrument_dir.display());
         println!("Quality model cache:    {}", quality_dir.display());
         println!("Emotion model cache:    {}", emotion_dir.display());
-        println!("VGGish model cache:     {}", vggish_dir.display());
+        println!("Similarity model cache:     {}", similarity_dir.display());
         return Ok(ModelPaths {
             audio_encoder,
             text_embeddings,
@@ -166,7 +166,7 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
             instrument_onnx,
             quality_dir,
             emotion_dir,
-            vggish_onnx,
+            similarity_onnx,
         });
     }
 
@@ -219,8 +219,8 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         if !emotion_arousal.exists() {
             eprintln!("  {}", emotion_arousal.display());
         }
-        if !vggish_onnx.exists() {
-            eprintln!("  {}", vggish_onnx.display());
+        if !similarity_onnx.exists() {
+            eprintln!("  {}", similarity_onnx.display());
         }
         std::process::exit(1);
     }
@@ -404,29 +404,29 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     }
 
     // Download VGGish model if needed
-    if !vggish_present {
-        println!("Downloading VGGish model...");
+    if !similarity_present {
+        println!("Downloading Discogs contrastive similarity model...");
         println!("(One-time setup. Model will be cached for future runs.)");
         println!();
 
-        let script = match find_script("export_vggish_onnx.py") {
+        let script = match find_script("export_similarity_model.py") {
             Some(p) => p,
             None => {
-                eprintln!("ERROR: Could not find scripts/export_vggish_onnx.py.");
+                eprintln!("ERROR: Could not find scripts/export_similarity_model.py.");
                 eprintln!("Ensure you are running from the project root directory.");
                 std::process::exit(1);
             }
         };
 
-        run_script(python, &script, "VGGish export");
+        run_script(python, &script, "similarity model export");
 
-        if !vggish_onnx.exists() {
-            eprintln!("ERROR: VGGish export completed but expected file is still missing.");
-            eprintln!("  {}", vggish_onnx.display());
+        if !similarity_onnx.exists() {
+            eprintln!("ERROR: similarity model export completed but expected file is still missing.");
+            eprintln!("  {}", similarity_onnx.display());
             std::process::exit(1);
         }
         println!();
-        println!("VGGish model downloaded successfully.");
+        println!("Similarity model downloaded successfully.");
     }
 
     println!("CLAP model cache:       {}", clap_dir.display());
@@ -434,7 +434,7 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
     println!("Instrument model cache: {}", instrument_dir.display());
     println!("Quality model cache:    {}", quality_dir.display());
     println!("Emotion model cache:    {}", emotion_dir.display());
-    println!("VGGish model cache:     {}", vggish_dir.display());
+    println!("Similarity model cache:     {}", similarity_dir.display());
 
     Ok(ModelPaths {
         audio_encoder,
@@ -443,6 +443,6 @@ pub fn ensure_model(no_cache_download: bool) -> anyhow::Result<ModelPaths> {
         instrument_onnx,
         quality_dir,
         emotion_dir,
-        vggish_onnx,
+        similarity_onnx,
     })
 }
